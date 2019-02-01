@@ -21,6 +21,7 @@ var (
 
 func init() {
 	image.RegisterFormat("ppm", "P6", Decode, DecodeConfig)
+	image.RegisterFormat("ppm", "P3", Decode, DecodeConfig)
 }
 
 // Decode reads a PPM image from Reader r and returns it as an image.Image.
@@ -76,13 +77,28 @@ func (d *decoder) decode(r io.Reader, configOnly bool) (image.Image, error) {
 
 	img := image.NewRGBA(image.Rect(0, 0, d.width, d.height))
 
-	for y := 0; y < d.height; y++ {
-		for x := 0; x < d.width; x++ {
-			_, err = io.ReadFull(d.br, pixel)
-			if err != nil {
-				return nil, errNotEnough
+	if d.magicNumber == "P6" {
+		for y := 0; y < d.height; y++ {
+			for x := 0; x < d.width; x++ {
+				_, err = io.ReadFull(d.br, pixel)
+				if err != nil {
+					return nil, errNotEnough
+				}
+				img.SetRGBA(x, y, color.RGBA{pixel[0], pixel[1], pixel[2], 0xff})
 			}
-			img.SetRGBA(x, y, color.RGBA{pixel[0], pixel[1], pixel[2], 0xff})
+		}
+	} else if d.magicNumber == "P3" {
+		for y := 0; y < d.height; y++ {
+			for x := 0; x < d.width; x++ {
+				for s := 0; s < 3; s++ {
+					pixel[s], err = d.getSubPixel()
+					if err != nil {
+						return nil, errNotEnough
+					}
+				}
+				img.SetRGBA(x, y, color.RGBA{pixel[0], pixel[1], pixel[2], 0xff})
+
+			}
 		}
 	}
 	return img, nil
@@ -111,7 +127,9 @@ func (d *decoder) decodeHeader() error {
 
 	d.magicNumber = string(headerFields[0])
 	if d.magicNumber != "P6" {
-		return errBadHeader
+		if d.magicNumber != "P3" {
+			return errBadHeader
+		}
 	}
 	d.width, err = strconv.Atoi(string(headerFields[1]))
 	if err != nil {
@@ -129,4 +147,31 @@ func (d *decoder) decodeHeader() error {
 		return errUnsupported
 	}
 	return nil
+}
+
+func (d *decoder) getSubPixel() (byte, error) {
+	var err error
+	var b byte
+	var val int
+	subpix := make([]byte, 0)
+
+	comment := false
+	for {
+		b, _ = d.br.ReadByte()
+		if b == '#' {
+			comment = true
+		} else if !comment && (b == ' ' || b == '\n' || b == '\t') {
+			break
+		} else if !comment {
+			subpix = append(subpix, b)
+		}
+		if comment && b == '\n' {
+			comment = false
+		}
+	}
+	val, err = strconv.Atoi(string(subpix))
+	if err != nil {
+		return 0, errNotEnough
+	}
+	return byte(val), nil
 }
